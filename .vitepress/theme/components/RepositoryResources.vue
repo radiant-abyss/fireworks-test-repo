@@ -13,6 +13,7 @@ import Tag from "primevue/tag";
 import type { CourseDetailFile } from "../course-catalog";
 import { probeRepositoryCdn, repositoryCdnUrl, repositoryRawUrl, type RepositoryCdn, type RepositoryCdnCacheStatus } from "../repository-resource-links";
 import { refreshResourceRepository, type CachedResourceSnapshot } from "../resource-tree-refresh";
+import { filterResourceFiles, resourceCategories } from "../resource-filters";
 
 type ResourceFile = CourseDetailFile & { repoName?: string };
 interface ResourceNode { key: string; data: { name: string; path: string; size: number; file?: ResourceFile }; children?: ResourceNode[]; leaf?: boolean }
@@ -22,6 +23,13 @@ const displayFiles = shallowRef<ResourceFile[]>(props.files);
 const snapshotCache = (globalThis as typeof globalThis & { __fireworksResourceSnapshots?: Map<string, CachedResourceSnapshot> }).__fireworksResourceSnapshots ??= new Map<string, CachedResourceSnapshot>();
 const toast = useToast();
 const query = ref("");
+const selectedCategory = ref("");
+const categories = computed(() => resourceCategories(displayFiles.value));
+const hasFilters = computed(() => !!query.value.trim() || !!selectedCategory.value);
+function clearFilters() { query.value = ""; selectedCategory.value = ""; }
+watch(categories, (available) => {
+  if (selectedCategory.value && !available.some((category) => category.name === selectedCategory.value)) selectedCategory.value = "";
+});
 const selectedFile = ref<ResourceFile>();
 const downloadDialogVisible = ref(false);
 const cacheStatus = ref<Record<RepositoryCdn, RepositoryCdnCacheStatus>>({ edgeone: "unavailable", esa: "unavailable" });
@@ -30,10 +38,7 @@ const cdnSources: Array<{ id: RepositoryCdn; name: string; description: string }
   { id: "esa", name: "ESA CDN", description: "ESA 边缘缓存备用线路。" },
 ];
 
-const filteredFiles = computed(() => {
-  const needle = query.value.trim().toLowerCase();
-  return needle ? displayFiles.value.filter((file) => `${file.name} ${file.path} ${file.repoName ?? ""}`.toLowerCase().includes(needle)) : displayFiles.value;
-});
+const filteredFiles = computed(() => filterResourceFiles(displayFiles.value, query.value, selectedCategory.value));
 
 interface ResourceTreeNode { key: string; data: { name: string; path: string; size: number; file?: ResourceFile }; children?: ResourceTreeNode[]; leaf?: boolean }
 const expandedKeys = ref<Record<string, boolean>>({});
@@ -60,7 +65,9 @@ const fileTree = computed<ResourceTreeNode[]>(() => {
 });
 function folderKeys(nodes: ResourceTreeNode[], result: Record<string, boolean> = {}) { for (const node of nodes) { if (!node.children) continue; result[node.key] = true; folderKeys(node.children, result); } return result; }
 watch(displayFiles, () => { expandedKeys.value = displayFiles.value.length <= 24 ? folderKeys(fileTree.value) : {}; }, { immediate: true });
-watch(fileTree, (tree) => { if (query.value.trim()) expandedKeys.value = folderKeys(tree); });
+watch(fileTree, (tree) => {
+  expandedKeys.value = hasFilters.value || displayFiles.value.length <= 24 ? folderKeys(tree) : {};
+});
 function toggleFolder(node: ResourceTreeNode) { expandedKeys.value = { ...expandedKeys.value, [node.key]: !expandedKeys.value[node.key] }; }
 
 async function refreshRepositorySnapshot(): Promise<void> {
@@ -102,7 +109,12 @@ function readableBytes(bytes: number) { if (bytes >= 1024 ** 3) return `${(bytes
     <Toast position="top-right" />
     <div class="resource-toolbar">
       <IconField class="resource-search"><InputIcon class="pi pi-search" /><InputText v-model="query" placeholder="搜索文件名或路径" aria-label="搜索资料" /></IconField>
-      <span class="file-summary" role="status">{{ query.trim() ? `${filteredFiles.length} / ${displayFiles.length} 个文件` : `${displayFiles.length} 个文件` }}</span>
+      <span class="file-summary" role="status">{{ hasFilters ? `${filteredFiles.length} / ${displayFiles.length} 个文件` : `${displayFiles.length} 个文件` }}</span>
+    </div>
+    <div v-if="displayFiles.length" class="resource-categories" role="group" aria-label="按资料分类筛选">
+      <button type="button" class="category-filter" :aria-pressed="selectedCategory === ''" @click="selectedCategory = ''">全部 <span>{{ displayFiles.length }}</span></button>
+      <button v-for="category in categories" :key="category.name" type="button" class="category-filter" :aria-pressed="selectedCategory === category.name" @click="selectedCategory = category.name">{{ category.name }} <span>{{ category.count }}</span></button>
+      <Button v-if="hasFilters" label="清除筛选" text size="small" @click="clearFilters" />
     </div>
     <TreeTable v-if="fileTree.length" v-model:expanded-keys="expandedKeys" :value="fileTree" class="resource-tree" size="small" aria-label="资料文件">
       <Column field="name" header="文件名" expander>
@@ -111,6 +123,10 @@ function readableBytes(bytes: number) { if (bytes >= 1024 ** 3) return `${(bytes
       <Column field="size" header="大小"><template #body="{ node }">{{ node.children ? readableBytes(node.data.size) : readableBytes(node.data.size) }}</template></Column>
       <Column header="下载"><template #body="{ node }"><Button v-if="!node.children" icon="pi pi-download" text rounded aria-label="下载资料" @click="openDownload(node.data.file)" /></template></Column>
     </TreeTable>
+    <div v-else-if="displayFiles.length" class="materials-empty" role="status">
+      <p>没有符合当前搜索和分类条件的资料。</p>
+      <Button label="清除筛选" text size="small" @click="clearFilters" />
+    </div>
     <p v-else class="materials-empty">当前资料仓库没有可展示的资料。</p>
     <Dialog v-model:visible="downloadDialogVisible" modal header="选择下载线路" :style="{ width: 'min(560px, calc(100vw - 32px))' }">
       <div class="download-options"><a v-for="option in downloadOptions" :key="option.name" :href="option.href" target="_blank" rel="noopener noreferrer" class="download-option"><span><strong>{{ option.name }}</strong><small>{{ option.description }}</small></span><Tag :value="cacheTag(option.status).label" :severity="cacheTag(option.status).severity" /></a></div>
@@ -124,6 +140,12 @@ function readableBytes(bytes: number) { if (bytes >= 1024 ** 3) return `${(bytes
 .resource-search { flex:1 1 14rem; max-width:22rem; min-width:0; }
 .resource-search :deep(input) { width:100%; }
 .file-summary { color:var(--vp-c-text-2); font-size:13px; }
+.resource-categories { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-bottom:1rem; }
+.category-filter { display:inline-flex; align-items:center; gap:.4rem; padding:.35rem .7rem; border:1px solid var(--vp-c-divider); border-radius:6px; background:var(--vp-c-bg); color:var(--vp-c-text-2); font:inherit; font-size:13px; cursor:pointer; }
+.category-filter span { font-size:12px; }
+.category-filter:hover { border-color:var(--vp-c-brand-1); }
+.category-filter[aria-pressed="true"] { border-color:var(--vp-c-brand-1); background:var(--vp-c-brand-soft); color:var(--vp-c-brand-1); }
+.category-filter:focus-visible { outline:2px solid var(--vp-c-brand-1); outline-offset:2px; }
 .entry-name { display:inline-flex; align-items:center; gap:.5rem; min-width:0; max-width:100%; padding:0; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
 .entry-folder { font-weight:500; }
 .entry-text { min-width:0; overflow-wrap:anywhere; }
