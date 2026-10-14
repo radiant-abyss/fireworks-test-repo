@@ -35,6 +35,6 @@ jobs:
           bun-version: '1.3.12'
       - run: bun install --frozen-lockfile
       - name: Verify course and resource tree contracts
-        run: bun test scripts/course-catalog.test.mts scripts/course-page-build.test.mts scripts/resource-tree.test.mts scripts/manifest-store.test.mts
+        run: bun test scripts/course-catalog.test.mts scripts/course-page-build.test.mts scripts/resource-tree.test.mts scripts/resource-filters.test.mts scripts/manifest-store.test.mts
       - name: Verify Registry and migration contracts
         run: python3 -m unittest tests.test_registry_repository_routes tests.test_repository_description tests.test_repository_cutover_hardening
